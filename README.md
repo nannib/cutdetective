@@ -101,4 +101,6 @@ Se si hanno problemi col Tkinter, in Windows il pacchetto arriva con l'istallazi
 # Come eseguire
 
 pip install -r requirements.txt
+
+
 python cropdetective.py 
