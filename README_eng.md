@@ -99,4 +99,5 @@ If you have problems with Tkinter, on Windows the package comes with the Python 
 
 # How to Run
 
-python cutdetective.py
+pip install -r requirements.txt
+python cropdetective.py 
