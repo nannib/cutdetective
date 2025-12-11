@@ -10,6 +10,34 @@ import os
 from datetime import datetime
 
 
+def template_matching_multiscale(img_color, crop_color, threshold=0.8):
+    img_gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
+    crop_gray = cv2.cvtColor(crop_color, cv2.COLOR_BGR2GRAY)
+
+    (tH, tW) = crop_gray.shape[:2]
+    found = None
+
+    for scale in np.linspace(0.2, 1.0, 20)[::-1]:
+        resized = cv2.resize(img_gray, (int(img_gray.shape[1] * scale), int(img_gray.shape[0] * scale)))
+        r = img_gray.shape[1] / float(resized.shape[1])
+
+        if resized.shape[0] < tH or resized.shape[1] < tW:
+            break
+
+        result = cv2.matchTemplate(resized, crop_gray, cv2.TM_CCOEFF_NORMED)
+        (_, maxVal, _, maxLoc) = cv2.minMaxLoc(result)
+
+        if found is None or maxVal > found[0]:
+            found = (maxVal, maxLoc, r)
+
+    if found and found[0] > threshold:
+        (maxVal, maxLoc, r) = found
+        (startX, startY) = (int(maxLoc[0] * r), int(maxLoc[1] * r))
+        (endX, endY) = (int((maxLoc[0] + tW) * r), int((maxLoc[1] + tH) * r))
+        return (startX, startY, endX, endY), maxVal
+    return None, None
+
+
 # ============================================================
 # FUNZIONE PRINCIPALE DI MATCHING
 # ============================================================
@@ -28,55 +56,69 @@ def verifica_ritaglio(path_originale, path_ritaglio):
     img = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
     crop = cv2.cvtColor(crop_color, cv2.COLOR_BGR2GRAY)
 
-    # ORB
-    orb = cv2.ORB_create(nfeatures=5000)
-    kp1, des1 = orb.detectAndCompute(img, None)
-    kp2, des2 = orb.detectAndCompute(crop, None)
-
-    if des1 is None or des2 is None:
-        return "Nessuna feature trovata (immagini troppo uniformi).", None, img_color, crop_color, None
-
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
-    matches = bf.knnMatch(des2, des1, k=2)
-
-    good = []
-    for m, n in matches:
-        if m.distance < 0.75 * n.distance:
-            good.append(m)
-
+    # Tentativo con SIFT e FLANN
     log = []
-    log.append(f"Match trovati: {len(matches)}")
-    log.append(f"Match buoni: {len(good)}")
+    sift_success = False
+    overlay_pil = None
+    overlay_rgb = None
 
-    if len(good) < 10:
-        log.append("RISULTATO: Il ritaglio NON appartiene alla foto.")
-        return "\n".join(log), None, img_color, crop_color, None
+    sift = cv2.SIFT_create()
+    kp1, des1 = sift.detectAndCompute(img, None)
+    kp2, des2 = sift.detectAndCompute(crop, None)
 
-    # Omografia
-    src_pts = np.float32([kp2[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp1[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    if des1 is not None and des2 is not None and len(kp1) >= 2 and len(kp2) >= 2:
+        FLANN_INDEX_KDTREE = 1
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=50)
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        matches = flann.knnMatch(des2, des1, k=2)
 
-    if H is None:
-        log.append("Omografia non trovata.")
-        log.append("RISULTATO: Il ritaglio NON appartiene alla foto.")
-        return "\n".join(log), None, img_color, crop_color, None
+        good = []
+        for m, n in matches:
+            if m.distance < 0.75 * n.distance:
+                good.append(m)
 
-    # Trasformazione dei bordi del ritaglio
-    h, w = crop.shape
-    corners_crop = np.float32([[0,0], [w,0], [w,h], [0,h]]).reshape(-1,1,2)
-    corners_transformed = cv2.perspectiveTransform(corners_crop, H)
+        log.append(f"SIFT - Match trovati: {len(matches)}")
+        log.append(f"SIFT - Match buoni: {len(good)}")
 
-    # Creazione overlay con bordo verde
-    overlay = img_color.copy()
-    cv2.polylines(overlay, [np.int32(corners_transformed)], True, (0,255,0), 3)
+        if len(good) >= 10:
+            src_pts = np.float32([kp2[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+            dst_pts = np.float32([kp1[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
-    overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-    overlay_pil = Image.fromarray(overlay_rgb)
+            H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
 
-    log.append("Omografia valida.")
-    log.append("RISULTATO: Il ritaglio APPARTIENE alla foto.")
+            if H is not None:
+                h, w = crop.shape
+                corners_crop = np.float32([[0,0], [w,0], [w,h], [0,h]]).reshape(-1,1,2)
+                corners_transformed = cv2.perspectiveTransform(corners_crop, H)
+
+                overlay = img_color.copy()
+                cv2.polylines(overlay, [np.int32(corners_transformed)], True, (0,255,0), 3)
+                overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                overlay_pil = Image.fromarray(overlay_rgb)
+
+                log.append("SIFT - Omografia valida.")
+                log.append("RISULTATO: Il ritaglio APPARTIENE alla foto (metodo SIFT).")
+                sift_success = True
+    
+    if not sift_success:
+        log.append("SIFT non ha trovato un match sufficiente o omografia fallita. Tentativo con Template Matching Multi-scala...")
+        
+        bbox, confidence = template_matching_multiscale(img_color, crop_color)
+        
+        if bbox is not None:
+            (startX, startY, endX, endY) = bbox
+            overlay = img_color.copy()
+            cv2.rectangle(overlay, (startX, startY), (endX, endY), (0, 0, 255), 3) # Rosso per Template Matching
+            overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+            overlay_pil = Image.fromarray(overlay_rgb)
+            
+            log.append(f"Template Matching - Trovato con confidenza: {confidence:.2f}")
+            log.append("RISULTATO: Il ritaglio APPARTIENE alla foto (metodo Template Matching).")
+        else:
+            log.append("Template Matching Multi-scala non ha trovato un match sufficiente.")
+            log.append("RISULTATO: Il ritaglio NON appartiene alla foto.")
 
     return "\n".join(log), overlay_pil, img_color, crop_color, overlay_rgb
 
