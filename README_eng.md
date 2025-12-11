@@ -100,4 +100,6 @@ If you have problems with Tkinter, on Windows the package comes with the Python 
 # How to Run
 
 pip install -r requirements.txt
+
+
 python cropdetective.py 
