@@ -1,3 +1,5 @@
+![Screenshot](screenshot.jpg)
+
 # Verifica se un ritaglio appartiene a una foto (GUI + PDF Report)
 
 Questo programma permette di verificare se un'immagine ritagliata proviene realmente da una foto originale.  
